@@ -1,89 +1,14 @@
 use std::time::Duration;
 
+use chrono::NaiveDateTime;
 use folketinget_api_models::{ft::domain::models::entity_types, OpenDataType};
 use hyper::{client::HttpConnector, Client, Error};
 use hyper_openssl::HttpsConnector;
 use log::{debug, info};
 use odata_simple_client::{Comparison, Connector, DataSource, Filter, Page};
 use rusqlite::Connection;
+use rusqlite_migration::{Migrations, M};
 use tokio::time::sleep;
-
-/// Create SQL batch command for creating all the databases necessary to hold the Folketinget API data
-fn create_schema() -> String {
-    entity_types()
-        .iter()
-        .map(|(entity, properties)| {
-            let properties = properties
-                .iter()
-                .map(|(name, description)| {
-                    format!(
-                        "\t{} {}",
-                        name,
-                        match *description {
-                            OpenDataType::Binary { nullable, key } => format!(
-                                "BLOB{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::Boolean { nullable, key } => format!(
-                                "BOOLEAN{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::Byte { nullable, key } => format!(
-                                "BYTE{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::DateTime { nullable, key } => format!(
-                                "DATETIME(3){}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::DateTimeOffset { nullable, key } => format!(
-                                "TEXT{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::Decimal { nullable, key } => format!(
-                                "DECIMAL{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::Double { nullable, key } => format!(
-                                "DOUBLE{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::Int16 { nullable, key } => format!(
-                                "INTEGER{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::Int32 { nullable, key } => format!(
-                                "INTEGER{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                            OpenDataType::String { nullable, key } => format!(
-                                "TEXT{}{}",
-                                if nullable { " NULL" } else { " NOT NULL" },
-                                if key { " PRIMARY KEY" } else { "" }
-                            ),
-                        }
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",\n");
-
-            format!(
-                "CREATE TABLE IF NOT EXISTS {} (\n{}\n);\n",
-                entity, properties
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 fn get_entity_by_name(typename: &str) -> &'static [(&'static str, OpenDataType)] {
     entity_types()
@@ -189,17 +114,22 @@ fn client() -> Client<HttpsConnector<HttpConnector>> {
 pub async fn get_next<C: Connector>(
     datasource: &DataSource<C>,
     resource_type: &str,
-    start: Option<u32>,
+    start: Option<chrono::NaiveDateTime>,
 ) -> Result<Page<serde_json::Value>, odata_simple_client::Error> {
-    let start = start.unwrap_or(0);
+    let start = start.unwrap_or(NaiveDateTime::from_timestamp(0, 0));
     debug!("fetching new {} starting from {}", resource_type, start);
+
     datasource
         .get_as::<serde_json::Value>(
             resource_type,
             Some(
                 Filter::default()
-                    .order_by("id", None)
-                    .filter("id", Comparison::GreaterThan, &start.to_string())
+                    .order_by("opdateringsdato", None)
+                    .filter(
+                        "opdateringsdato",
+                        Comparison::GreaterThan,
+                        &format!("datetime'{}T{}'", start.date(), start.time()),
+                    )
                     .inline_count("allpages".to_string()),
             ),
         )
@@ -211,18 +141,33 @@ pub async fn mirror_next<C: Connector>(
     resource_type: &str,
     db: &Connection,
 ) -> Result<Page<serde_json::Value>, Error> {
-    let (count, max_id): (Option<u32>, Option<u32>) = db
+    let (count, max_id): (Option<u32>, Option<NaiveDateTime>) = db
         .query_row(
             &format!(
-                "SELECT COUNT({1}), MAX({1}) FROM {0};",
+                "SELECT COUNT({1}), MAX({2}) FROM {0};",
                 resource_type,
-                get_key_name(resource_type)
+                get_key_name(resource_type),
+                "opdateringsdato"
             ),
             [],
-            |row| Ok((row.get(0).ok(), row.get(1).ok())),
+            |row| {
+                Ok((
+                    row.get(0).ok(),
+                    row.get::<usize, String>(1)
+                        .ok()
+                        .map(|ts| {
+                            NaiveDateTime::parse_from_str(&ts, "\"%Y-%m-%dT%H:%M:%S%.3f\"").ok()
+                        })
+                        .flatten(),
+                ))
+            },
         )
         .unwrap();
 
+    info!(
+        "maximum opdateringsdato for {}: {:?}",
+        resource_type, &max_id
+    );
     let page = get_next(&datasource, resource_type, max_id).await.unwrap();
 
     for value in &page.value {
@@ -253,9 +198,15 @@ pub async fn mirror_next<C: Connector>(
 async fn main() {
     pretty_env_logger::init_timed();
 
-    let db = Connection::open("folketinget.sqlite3").expect("unable to open database");
-    let schema = create_schema();
-    db.execute_batch(&schema).unwrap();
+    let mut db = Connection::open("folketinget.sqlite3").expect("unable to open database");
+
+    let migrations = Migrations::new(vec![M::up(include_str!(
+        "../migrations/01-create-tables.sql"
+    ))]);
+
+    migrations
+        .to_latest(&mut db)
+        .expect("failed to run migrations");
 
     let ft = DataSource::new(client(), "oda.ft.dk").unwrap();
 
