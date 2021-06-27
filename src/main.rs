@@ -36,56 +36,6 @@ fn insert_statement(typename: &str) -> String {
     format!("INSERT INTO {}({}) VALUES({})", typename, indices, values)
 }
 
-fn get_key_name(typename: &str) -> &'static str {
-    get_entity_by_name(typename)
-        .iter()
-        .find(|(_, description)| match description {
-            OpenDataType::Binary {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::Boolean {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::Byte {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::DateTime {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::DateTimeOffset {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::Decimal {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::Double {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::Int16 {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::Int32 {
-                nullable: _,
-                key: true,
-            } => true,
-            OpenDataType::String {
-                nullable: _,
-                key: true,
-            } => true,
-            _ => false,
-        })
-        .unwrap()
-        .0
-}
-
 fn insert(
     conn: &Connection,
     typename: &str,
@@ -144,10 +94,8 @@ pub async fn mirror_next<C: Connector>(
     let (count, max_id): (Option<u32>, Option<NaiveDateTime>) = db
         .query_row(
             &format!(
-                "SELECT COUNT({1}), MAX({2}) FROM {0};",
-                resource_type,
-                get_key_name(resource_type),
-                "opdateringsdato"
+                "SELECT COUNT(id), MAX(opdateringsdato) FROM {0};",
+                resource_type
             ),
             [],
             |row| {
