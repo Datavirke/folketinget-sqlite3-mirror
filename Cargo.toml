@@ -14,9 +14,12 @@ odata-simple-client = { git = "https://github.com/Datavirke/odata-simple-client"
 hyper = "0.14.7"
 hyper-openssl = "0.9.1"
 tokio = { version = "1.6.0", features = [ "rt", "macros", "time" ]}
-rusqlite = { version = "0.25.3", features = ["serde_json", "chrono"] }
-rusqlite_migration = "0.4.2"
+rusqlite = { version = "0.26.1", features = ["serde_json", "chrono", "backup"] }
+rusqlite_migration = "0.5.0"
 serde = "1.0.126"
 serde_json = { version = "1.0.64" }
 futures = { version = "0.3.15" }
 chrono = "0.4.19"
+chrono-tz = "0.6.0"
+r2d2_sqlite = "0.19.0"
+r2d2 = "0.8.9"
