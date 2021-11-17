@@ -1,11 +1,10 @@
-use log::info;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite_migration::{Migrations, M};
-
-use crate::backup::create_backup;
+use warp::Filter;
 
 mod backup;
+mod metrics;
 mod scraper;
 
 fn initialize_database() -> Pool<SqliteConnectionManager> {
@@ -29,10 +28,16 @@ async fn main() {
 
     let pool = initialize_database();
 
-    info!(
-        "took startup backup: {}",
-        create_backup(pool.clone()).unwrap()
-    );
+    tokio::spawn((|| {
+        let pool = pool.clone();
+        async move {
+            warp::serve(
+                backup::backup_routes(pool.clone()).or(metrics::metric_routes(pool.clone())),
+            )
+            .run(([127, 0, 0, 1], 3030))
+            .await
+        }
+    })());
 
     tokio::spawn(async move { scraper::synchronize(pool.clone()).await })
         .await

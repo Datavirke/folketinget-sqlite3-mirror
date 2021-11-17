@@ -1,17 +1,22 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Utc};
 use folketinget_api_models::{ft::domain::models::entity_types, OpenDataType};
+use futures::{future::join_all, Future};
+use governor::{
+    clock::QuantaClock,
+    state::{InMemoryState, NotKeyed},
+    Quota, RateLimiter,
+};
 use hyper::{client::HttpConnector, Client, Error};
 use hyper_openssl::HttpsConnector;
 use log::{debug, info};
-use odata_simple_client::{Comparison, Connector, DataSource, Filter, Page};
+use odata_simple_client::{
+    Comparison, Connector, DataSource, Direction, InlineCount, ListRequest, Page,
+};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
-use tokio::time::sleep;
-
-const LOOP_SLEEP_DURATION: Duration = Duration::from_secs(5);
 
 fn get_entity_by_name(typename: &str) -> &'static [(&'static str, OpenDataType)] {
     entity_types()
@@ -79,31 +84,29 @@ async fn get_next<C: Connector>(
     datasource: &DataSource<C>,
     resource_type: &str,
     start: Option<NaiveDateTime>,
+    rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
 ) -> Result<Page<serde_json::Value>, odata_simple_client::Error> {
     let start = start.unwrap_or(NaiveDateTime::from_timestamp(0, 0));
     debug!("fetching new {} starting from {}", resource_type, start);
 
-    datasource
-        .get_as::<serde_json::Value>(
-            resource_type,
-            Some(
-                Filter::default()
-                    .order_by("opdateringsdato", None)
-                    .filter(
-                        "opdateringsdato",
-                        Comparison::GreaterThan,
-                        &format!("datetime'{}T{}'", start.date(), start.time()),
-                    )
-                    .inline_count("allpages".to_string()),
-            ),
+    let request = ListRequest::new(resource_type)
+        .order_by("opdateringsdato", Direction::Ascending)
+        .filter(
+            "opdateringsdato",
+            Comparison::GreaterThan,
+            &format!("datetime'{}'", start.format("%Y-%m-%dT%H:%M:%S%.3f")),
         )
-        .await
+        .inline_count(InlineCount::AllPages);
+
+    rate_limiter.until_ready().await;
+    datasource.fetch_paged::<serde_json::Value>(request).await
 }
 
 async fn mirror_next<C: Connector>(
     datasource: &DataSource<C>,
     resource_type: &str,
     pool: &Pool<SqliteConnectionManager>,
+    rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
 ) -> Result<Page<serde_json::Value>, Error> {
     let (count, max_id): (Option<u32>, Option<NaiveDateTime>) = pool
         .get()
@@ -130,7 +133,9 @@ async fn mirror_next<C: Connector>(
         "maximum opdateringsdato for {}: {:?}",
         resource_type, &max_id
     );
-    let page = get_next(&datasource, resource_type, max_id).await.unwrap();
+    let page = get_next(&datasource, resource_type, max_id, &rate_limiter)
+        .await
+        .unwrap();
 
     for value in &page.value {
         insert(&pool.get().unwrap(), resource_type, &value).unwrap();
@@ -156,10 +161,44 @@ async fn mirror_next<C: Connector>(
     Ok(page)
 }
 
+fn mirror_all<C: Connector>(
+    datasource: &DataSource<C>,
+    resource_type: &str,
+    pool: &Pool<SqliteConnectionManager>,
+    rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
+) -> impl Future<Output = Result<usize, Error>> {
+    let datasource = datasource.clone();
+    let resource_type = resource_type.to_owned();
+    let pool = pool.clone();
+    let rate_limiter = rate_limiter.clone();
+
+    async move {
+        let mut total = 0;
+        loop {
+            let mirrored = mirror_next(&datasource, &resource_type, &pool, &rate_limiter)
+                .await
+                .unwrap();
+
+            total += mirrored.value.len();
+            if mirrored.value.is_empty() {
+                break;
+            }
+        }
+
+        return Ok(total);
+    }
+}
+
 pub async fn synchronize(pool: Pool<SqliteConnectionManager>) {
-    let ft = DataSource::new(client(), "oda.ft.dk").unwrap();
+    let ft = DataSource::new(client(), "oda.ft.dk", Some("/api".to_string())).unwrap();
+    let rate_limiter = std::sync::Arc::new(RateLimiter::direct(Quota::per_second(
+        nonzero_ext::nonzero!(5u32),
+    )));
 
     loop {
+        let start = Utc::now();
+
+        let mut syncs = Vec::new();
         for (typename, _) in entity_types() {
             // Sambehandlinger don't actually appear to exist in the API, even though it appears
             // in the model. Returns 404 if accessed
@@ -167,17 +206,23 @@ pub async fn synchronize(pool: Pool<SqliteConnectionManager>) {
                 continue;
             }
 
-            loop {
-                if mirror_next(&ft, typename, &pool).await.unwrap().value.len() == 0 {
-                    break;
-                }
-            }
+            syncs.push(tokio::spawn(mirror_all(
+                &ft,
+                &typename,
+                &pool,
+                &rate_limiter,
+            )));
         }
+        join_all(syncs).await;
+
+        let cycle_time = Utc::now()
+            .signed_duration_since(start)
+            .to_std()
+            .unwrap_or(Duration::from_nanos(1));
 
         info!(
-            "completed synchronization cycle, sleeping for {} seconds",
-            LOOP_SLEEP_DURATION.as_secs()
+            "completed synchronization cycle in {}ms",
+            cycle_time.as_millis(),
         );
-        sleep(LOOP_SLEEP_DURATION).await;
     }
 }
