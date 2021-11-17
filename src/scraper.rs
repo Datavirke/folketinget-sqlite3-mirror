@@ -9,7 +9,7 @@ use governor::{
     Quota, RateLimiter,
 };
 use hyper::{client::HttpConnector, Client, Error};
-use hyper_openssl::HttpsConnector;
+use hyper_tls::HttpsConnector;
 use log::{debug, info};
 use odata_simple_client::{
     Comparison, Connector, DataSource, Direction, InlineCount, ListRequest, Page,
@@ -75,7 +75,7 @@ fn insert(
 
 fn client() -> Client<HttpsConnector<HttpConnector>> {
     let client: Client<HttpsConnector<HttpConnector>> =
-        Client::builder().build(HttpsConnector::<HttpConnector>::new().unwrap());
+        Client::builder().build(HttpsConnector::new());
 
     client
 }

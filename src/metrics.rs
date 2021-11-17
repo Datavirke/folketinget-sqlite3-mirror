@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chrono::Utc;
 use folketinget_api_models::ft::domain::models::entity_types;
-use log::{debug, info, warn};
+use log::{info, warn};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use tokio::sync::RwLock;

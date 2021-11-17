@@ -2,7 +2,7 @@
 name = "folketinget-sqlite3-mirror"
 version = "0.1.0"
 authors = ["Mathias Pius <contact@pius.io>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,10 +13,10 @@ tokio = { version = "1.6.0", features = [ "rt", "macros", "time" ]}
 futures = { version = "0.3.15" }
 
 # Scraping
-folketinget-api-models = { git = "https://github.com/Datavirke/folketinget-api-models", rev = "770adb5afcfeac0c273145291e0171f606f01dcb" }
-odata-simple-client = { path = "../odata-simple-client" }
+folketinget-api-models = "0.2.0"
+odata-simple-client = "0.2.2"
 hyper = "0.14.7"
-hyper-openssl = "0.9.1"
+hyper-tls = "0.5.0"
 governor = "0.3.2"
 nonzero_ext = "0.3.0"
 
@@ -34,3 +34,5 @@ r2d2 = "0.8.9"
 
 # Data serving
 warp = "0.3.2"
+
+[workspace]
