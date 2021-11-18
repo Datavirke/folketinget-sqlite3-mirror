@@ -35,9 +35,7 @@ jobs:
 
       - name: Fetch the version from Cargo.toml
         id: retrieve_tag
-        run: |
-          echo ::set-output name=crate-name::$(cat Cargo.toml | grep name | head -n1 | awk '{ print $3 }' | tr -d '"')
-          echo ::set-output name=crate-tag::$(cat Cargo.toml | grep version | head -n1 | awk '{ print $3 }' | tr -d '"')
+        run: echo ::set-output name=crate-tag::$(cat Cargo.toml | grep version | head -n1 | awk '{ print $3 }' | tr -d '"')
         shell: bash
 
       - name: Build and push Docker image
@@ -45,5 +43,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }},${{ steps.retrieve_tag.outputs.crate-name }}:${{ steps.retrieve_tag.outputs.crate-tag }}
+          tags: ${{ steps.meta.outputs.tags }},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.retrieve_tag.outputs.crate-tag }}
           labels: ${{ steps.meta.outputs.labels }}
