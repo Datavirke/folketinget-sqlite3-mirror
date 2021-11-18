@@ -47,7 +47,7 @@ async fn update_metrics(
                 "finished metric update loop, sleeping for {}s",
                 (METRIC_COLLECTION_FREQUENCY - cycle_time).as_secs()
             );
-            tokio::time::sleep((METRIC_COLLECTION_FREQUENCY - cycle_time).into()).await;
+            tokio::time::sleep(METRIC_COLLECTION_FREQUENCY - cycle_time).await;
         } else {
             warn!("metric collection loop took longer than {} seconds, restarting new loop immediately", METRIC_COLLECTION_FREQUENCY.as_secs());
         }
@@ -72,9 +72,9 @@ pub fn metric_routes(
 
                 let mut output = String::new();
                 for (metric, count) in metrics.read().await.iter() {
-                    write!(
+                    writeln!(
                         &mut output,
-                        "items_cached_total{{resource_type=\"{}\"}} {}\n",
+                        "items_cached_total{{resource_type=\"{}\"}} {}",
                         metric, count
                     )
                     .unwrap();

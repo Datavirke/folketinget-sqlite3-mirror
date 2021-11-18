@@ -4,12 +4,15 @@ use rusqlite_migration::{Migrations, M};
 use warp::Filter;
 
 mod backup;
+mod config;
 mod metrics;
 mod scraper;
 
-fn initialize_database() -> Pool<SqliteConnectionManager> {
-    let pool = r2d2::Pool::new(SqliteConnectionManager::file("folketinget.sqlite3"))
+fn initialize_database(sqlite_path: &str) -> Pool<SqliteConnectionManager> {
+    let pool = r2d2::Pool::new(SqliteConnectionManager::file(sqlite_path))
         .expect("failed to open database");
+
+    pool.get().expect("failed to open database");
 
     let migrations = Migrations::new(vec![M::up(include_str!(
         "../migrations/01-create-tables.sql"
@@ -24,22 +27,25 @@ fn initialize_database() -> Pool<SqliteConnectionManager> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let settings = config::Settings::new();
     pretty_env_logger::init_timed();
 
-    let pool = initialize_database();
+    let pool = initialize_database(&settings.sqlite.path);
 
-    tokio::spawn((|| {
-        let pool = pool.clone();
-        async move {
-            warp::serve(
-                backup::backup_routes(pool.clone()).or(metrics::metric_routes(pool.clone())),
-            )
-            .run(([127, 0, 0, 1], 3030))
-            .await
+    tokio::spawn({
+        {
+            let pool = pool.clone();
+            async move {
+                warp::serve(
+                    backup::backup_routes(pool.clone()).or(metrics::metric_routes(pool.clone())),
+                )
+                .run(([0, 0, 0, 0], 3030))
+                .await
+            }
         }
-    })());
+    });
 
-    tokio::spawn(async move { scraper::synchronize(pool.clone()).await })
+    tokio::spawn(async move { scraper::synchronize(&settings, pool.clone()).await })
         .await
         .unwrap();
 }

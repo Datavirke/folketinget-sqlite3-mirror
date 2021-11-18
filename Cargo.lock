@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "folketinget-sqlite3-mirror"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "chrono-tz",

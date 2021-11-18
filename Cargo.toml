@@ -1,6 +1,6 @@
 [package]
 name = "folketinget-sqlite3-mirror"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Mathias Pius <contact@pius.io>"]
 edition = "2021"
 

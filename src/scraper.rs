@@ -18,9 +18,11 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 
+use crate::config::Settings;
+
 fn get_entity_by_name(typename: &str) -> &'static [(&'static str, OpenDataType)] {
     entity_types()
-        .into_iter()
+        .iter()
         .find(|(entity, _)| entity == &typename)
         .unwrap()
         .1
@@ -86,7 +88,7 @@ async fn get_next<C: Connector>(
     start: Option<NaiveDateTime>,
     rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
 ) -> Result<Page<serde_json::Value>, odata_simple_client::Error> {
-    let start = start.unwrap_or(NaiveDateTime::from_timestamp(0, 0));
+    let start = start.unwrap_or_else(|| NaiveDateTime::from_timestamp(0, 0));
     debug!("fetching new {} starting from {}", resource_type, start);
 
     let request = ListRequest::new(resource_type)
@@ -133,17 +135,17 @@ async fn mirror_next<C: Connector>(
         "maximum opdateringsdato for {}: {:?}",
         resource_type, &max_id
     );
-    let page = get_next(&datasource, resource_type, max_id, &rate_limiter)
+    let page = get_next(datasource, resource_type, max_id, rate_limiter)
         .await
         .unwrap();
 
     for value in &page.value {
-        insert(&pool.get().unwrap(), resource_type, &value).unwrap();
+        insert(&pool.get().unwrap(), resource_type, value).unwrap();
     }
 
     let remaining: u32 = page.count.as_deref().unwrap_or("0").parse().unwrap();
 
-    if page.value.len() == 0 {
+    if page.value.is_empty() {
         debug!(
             "finished mirroring {} ({} total)",
             count.unwrap_or(0),
@@ -185,14 +187,14 @@ fn mirror_all<C: Connector>(
             }
         }
 
-        return Ok(total);
+        Ok(total)
     }
 }
 
-pub async fn synchronize(pool: Pool<SqliteConnectionManager>) {
-    let ft = DataSource::new(client(), "oda.ft.dk", Some("/api".to_string())).unwrap();
+pub async fn synchronize(settings: &Settings, pool: Pool<SqliteConnectionManager>) {
+    let ft = DataSource::new(client(), "oda.ft.dk".to_string(), Some("/api".to_string())).unwrap();
     let rate_limiter = std::sync::Arc::new(RateLimiter::direct(Quota::per_second(
-        nonzero_ext::nonzero!(5u32),
+        settings.scraper.requests_per_second,
     )));
 
     loop {
@@ -208,7 +210,7 @@ pub async fn synchronize(pool: Pool<SqliteConnectionManager>) {
 
             syncs.push(tokio::spawn(mirror_all(
                 &ft,
-                &typename,
+                typename,
                 &pool,
                 &rate_limiter,
             )));
@@ -218,7 +220,7 @@ pub async fn synchronize(pool: Pool<SqliteConnectionManager>) {
         let cycle_time = Utc::now()
             .signed_duration_since(start)
             .to_std()
-            .unwrap_or(Duration::from_nanos(1));
+            .unwrap_or_else(|_| Duration::from_nanos(1));
 
         info!(
             "completed synchronization cycle in {}ms",

@@ -33,10 +33,15 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
+      - name: Fetch the version from Cargo.toml
+        id: retrieve_tag
+        run: echo ::set-output name=crate-tag::$(cat Cargo.toml | grep version | head -n1 | awk '{ print $3 }' | tr -d '"')
+        shell: bash
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v2
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ steps.meta.outputs.labels }},${{ steps.retrieve_tag.outputs.crate-tag }}

@@ -5,6 +5,19 @@ Since the data volume is rather large, the initial synchronization will take a w
 
 Last run I did took about 12 hours before the initial synchronization was done.
 
+# Usage
+Run using Docker:
+```bash
+mkdir data
+docker run -e RUST_LOG=info \
+    -e FTS_SCRAPER_REQUESTS_PER_SECOND=5 \
+    -e FTS_SCRAPER_DOMAIN=oda.ft.dk \
+    -e FTS_DATABASE_SQLITE_PATH=data/folketinget.sqlite3 \
+    -v $(pwd)/data:data
+    ghcr.io/datavirke/folketinget-sqlite3-mirror:master
+```
+Collected data will be stored in a `data` directory in your current working directory.
+All the environment variables (with the exception of RUST_LOG) contain the default settings. If omitted, the program will default to these same values.
 
 ## Notes
 Since the different resource types (Dokument, Aktør, DokumentAktør(relation)) are polled in succession and synchronized entirely, before moving onto the new dokument type, the database can never be said to be in a consistent state.
