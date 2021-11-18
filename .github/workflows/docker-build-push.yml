@@ -37,7 +37,7 @@ jobs:
         id: retrieve_tag
         run: |
           echo ::set-output name=crate-tag::$(cat Cargo.toml | grep version | head -n1 | awk '{ print $3 }' | tr -d '"')
-          echo ::set-output name=image_registry::$(echo ${{ env.REGISTRY }} | tr '[:upper:]' '[:lower:]')
+          echo ::set-output name=image_registry::$(echo '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')
         shell: bash
 
       - name: Build and push Docker image
