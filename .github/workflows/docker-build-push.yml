@@ -45,5 +45,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }},${{ steps.retrieve_tag.outputs.crate-name }};${{ steps.retrieve_tag.outputs.crate-tag }}
+          tags: ${{ steps.meta.outputs.tags }},${{ steps.retrieve_tag.outputs.crate-name }}:${{ steps.retrieve_tag.outputs.crate-tag }}
           labels: ${{ steps.meta.outputs.labels }}
