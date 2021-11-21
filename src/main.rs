@@ -7,7 +7,10 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite_migration::{Migrations, M};
 use tokio::{
     select,
-    sync::{watch, RwLock},
+    sync::{
+        watch::{self, Receiver},
+        RwLock,
+    },
 };
 use warp::Filter;
 
@@ -34,12 +37,31 @@ fn initialize_database(sqlite_path: &str) -> Pool<SqliteConnectionManager> {
     pool
 }
 
+async fn start_webserver(
+    pool: Pool<SqliteConnectionManager>,
+    metrics: Arc<RwLock<HashMap<&'static str, usize>>>,
+    mut shutdown: Receiver<bool>,
+) {
+    select! {
+        _ = warp::serve(
+            backup::backup_routes(pool.clone())
+            .or(metrics::metric_routes(metrics.clone()))
+            .or(api::documents::document_routes(pool.clone())),
+        ).run(([0, 0, 0, 0], 3030)) => {
+            info!("Webserver quit");
+        },
+        _ = shutdown.changed() => {
+            info!("Webserver received Graceful Shutdown request, exiting");
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let settings = config::Settings::new();
     pretty_env_logger::init_timed();
 
-    let (shutdown_signaller, mut shutdown) = watch::channel(false);
+    let (shutdown_signaller, shutdown) = watch::channel(false);
 
     let pool = initialize_database(&settings.sqlite.path);
     let metrics = Arc::new(RwLock::new(HashMap::new()));
@@ -53,31 +75,13 @@ async fn main() {
             pool.clone(),
             shutdown_signaller.subscribe(),
         )),
+        // Webserver task providing access to the SQLite database, as well as the prometheus endpoint.
+        tokio::spawn(start_webserver(pool.clone(), metrics.clone(), shutdown)),
         // Ctrl+C watcher.
         tokio::spawn(async move {
             tokio::signal::ctrl_c().await.unwrap();
             info!("Ctrl+C detected, initiating graceful shutdown");
             shutdown_signaller.send(true).unwrap();
-        }),
-        // Webserver task providing access to the SQLite database, as well as the prometheus endpoint.
-        tokio::spawn({
-            {
-                let pool = pool.clone();
-                async move {
-                    select! {
-                        _ = warp::serve(
-                            backup::backup_routes(pool.clone())
-                            .or(metrics::metric_routes(metrics.clone()))
-                            .or(api::documents::document_routes(pool.clone())),
-                        ).run(([0, 0, 0, 0], 3030)) => {
-                            info!("Webserver quit");
-                        },
-                        _ = shutdown.changed() => {
-                            info!("Webserver received Graceful Shutdown request, exiting");
-                        }
-                    }
-                }
-            }
         }),
     ])
     .await;
