@@ -17,6 +17,7 @@ use odata_simple_client::{
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
+use tokio::sync::watch::Receiver;
 
 use crate::config::Settings;
 
@@ -168,6 +169,7 @@ fn mirror_all<C: Connector>(
     resource_type: &str,
     pool: &Pool<SqliteConnectionManager>,
     rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
+    shutdown: Receiver<bool>,
 ) -> impl Future<Output = Result<usize, Error>> {
     let datasource = datasource.clone();
     let resource_type = resource_type.to_owned();
@@ -185,46 +187,65 @@ fn mirror_all<C: Connector>(
             if mirrored.value.is_empty() {
                 break;
             }
+
+            if *shutdown.borrow() {
+                info!("Graceful shutdown received, exiting inner synchonization loop");
+                return Ok(total);
+            }
         }
 
         Ok(total)
     }
 }
 
-pub async fn synchronize(settings: &Settings, pool: Pool<SqliteConnectionManager>) {
+pub fn synchronize(
+    settings: &Settings,
+    pool: Pool<SqliteConnectionManager>,
+    shutdown: Receiver<bool>,
+) -> impl Future<Output = ()> {
     let ft = DataSource::new(client(), "oda.ft.dk".to_string(), Some("/api".to_string())).unwrap();
     let rate_limiter = std::sync::Arc::new(RateLimiter::direct(Quota::per_second(
         settings.scraper.requests_per_second,
     )));
 
-    loop {
-        let start = Utc::now();
+    async move {
+        loop {
+            let start = Utc::now();
 
-        let mut syncs = Vec::new();
-        for (typename, _) in entity_types() {
-            // Sambehandlinger don't actually appear to exist in the API, even though it appears
-            // in the model. Returns 404 if accessed
-            if *typename == "Sambehandlinger" {
-                continue;
+            let mut syncs = Vec::new();
+            for (typename, _) in entity_types() {
+                // Sambehandlinger don't actually appear to exist in the API, even though it appears
+                // in the model. Returns 404 if accessed
+                if *typename == "Sambehandlinger" {
+                    continue;
+                }
+
+                syncs.push(tokio::spawn(mirror_all(
+                    &ft,
+                    typename,
+                    &pool,
+                    &rate_limiter,
+                    shutdown.clone(),
+                )));
             }
+            join_all(syncs).await;
 
-            syncs.push(tokio::spawn(mirror_all(
-                &ft,
-                typename,
-                &pool,
-                &rate_limiter,
-            )));
+            let cycle_time = Utc::now()
+                .signed_duration_since(start)
+                .to_std()
+                .unwrap_or_else(|_| Duration::from_nanos(1));
+
+            info!(
+                "completed synchronization cycle in {}ms",
+                cycle_time.as_millis(),
+            );
+
+            if *shutdown.borrow() {
+                info!(
+                    "Synchronizer received Graceful shutdown request, exiting synchonization loop"
+                );
+                return;
+            }
         }
-        join_all(syncs).await;
-
-        let cycle_time = Utc::now()
-            .signed_duration_since(start)
-            .to_std()
-            .unwrap_or_else(|_| Duration::from_nanos(1));
-
-        info!(
-            "completed synchronization cycle in {}ms",
-            cycle_time.as_millis(),
-        );
     }
 }

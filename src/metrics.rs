@@ -24,7 +24,7 @@ fn count_resources(pool: &Pool<SqliteConnectionManager>, resource_type: &str) ->
         .ok()
 }
 
-async fn update_metrics(
+pub async fn update_metrics(
     metrics: Arc<RwLock<HashMap<&'static str, usize>>>,
     pool: Pool<SqliteConnectionManager>,
 ) {
@@ -55,13 +55,9 @@ async fn update_metrics(
 }
 
 pub fn metric_routes(
-    pool: Pool<SqliteConnectionManager>,
+    metrics: Arc<RwLock<HashMap<&'static str, usize>>>,
 ) -> impl warp::Filter<Extract = impl Reply, Error = Rejection> + Clone {
     use std::fmt::Write;
-
-    let metrics = Arc::new(RwLock::new(HashMap::new()));
-
-    tokio::spawn(update_metrics(metrics.clone(), pool));
 
     warp::path!("metrics")
         .and(warp::get())

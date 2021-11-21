@@ -1,6 +1,6 @@
 [package]
 name = "folketinget-sqlite3-mirror"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Mathias Pius <contact@pius.io>"]
 edition = "2021"
 
@@ -9,7 +9,7 @@ edition = "2021"
 [dependencies]
 log = "0.4.14"
 pretty_env_logger = "0.4.0"
-tokio = { version = "1.6.0", features = [ "rt", "macros", "time" ]}
+tokio = { version = "1.6.0", features = [ "rt", "macros", "time", "signal" ]}
 futures = { version = "0.3.15" }
 
 # Scraping
