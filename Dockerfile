@@ -8,7 +8,7 @@ RUN mkdir src \
     && cargo build --release
 
 # Add in our actual source code and build
-ADD ./src/* ./src/
+ADD src ./src
 ADD ./migrations/* ./migrations/
 RUN cargo build --release
 
