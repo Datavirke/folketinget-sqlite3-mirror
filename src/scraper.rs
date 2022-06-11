@@ -203,7 +203,7 @@ pub fn synchronize(
     shutdown: Receiver<bool>,
 ) -> impl Future<Output = ()> {
     let ft = DataSource::new(client(), "oda.ft.dk".to_string(), Some("/api".to_string())).unwrap();
-    let rate_limiter = std::sync::Arc::new(RateLimiter::direct(Quota::per_second(
+    let rate_limiter = Arc::new(RateLimiter::direct(Quota::per_second(
         settings.scraper.requests_per_second,
     )));
 
