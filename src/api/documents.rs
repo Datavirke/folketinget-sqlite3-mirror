@@ -52,7 +52,7 @@ fn fetch_documents_newer_than(
     docs
 }
 
-// localhost:3030/api/documents?since=2021-11-18T21:58:13Z
+// localhost:3030/api/documents?since=2021-11-18T21:58:13.000Z
 pub fn document_routes(
     pool: Pool<SqliteConnectionManager>,
 ) -> impl warp::Filter<Extract = impl Reply, Error = Rejection> + Clone {

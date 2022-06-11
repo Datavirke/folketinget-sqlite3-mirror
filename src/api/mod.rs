@@ -3,7 +3,7 @@ use chrono::{DateTime, NaiveDateTime, ParseError, TimeZone, Utc};
 pub mod documents;
 
 /// Format with which datetimes are formatted in the database.
-pub const DATABASE_DATETIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.3fZ";
+pub const DATABASE_DATETIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.3f";
 
 pub fn from_local_to_utc(datetime: &NaiveDateTime) -> DateTime<Utc> {
     chrono_tz::Europe::Copenhagen
