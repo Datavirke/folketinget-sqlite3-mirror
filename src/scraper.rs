@@ -123,10 +123,9 @@ async fn mirror_next<C: Connector>(
             |row| {
                 Ok((
                     row.get(0).ok(),
-                    row.get::<usize, String>(1)
-                        .ok()
-                        .map(|ts| NaiveDateTime::parse_from_str(&ts, "%Y-%m-%dT%H:%M:%S%.3f").ok())
-                        .flatten(),
+                    row.get::<usize, String>(1).ok().and_then(|ts| {
+                        NaiveDateTime::parse_from_str(&ts, "%Y-%m-%dT%H:%M:%S%.3f").ok()
+                    }),
                 ))
             },
         )
