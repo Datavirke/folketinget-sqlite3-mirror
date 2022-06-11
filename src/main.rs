@@ -68,7 +68,11 @@ async fn main() {
 
     join_all([
         // Background task for publishing metrics
-        tokio::spawn(metrics::update_metrics(metrics.clone(), pool.clone())),
+        tokio::spawn(metrics::update_metrics(
+            metrics.clone(),
+            shutdown.clone(),
+            pool.clone(),
+        )),
         // Background synchronization task
         tokio::spawn(scraper::synchronize(
             &settings,

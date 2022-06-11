@@ -189,7 +189,7 @@ fn mirror_all<C: Connector>(
             }
 
             if *shutdown.borrow() {
-                info!("Graceful shutdown received, exiting inner synchonization loop");
+                info!("mirror_all({resource_type}) received graceful shutdown request, exiting inner synchonization loop");
                 return Ok(total);
             }
         }

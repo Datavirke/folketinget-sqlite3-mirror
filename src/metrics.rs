@@ -5,7 +5,10 @@ use folketinget_api_models::ft::domain::models::entity_types;
 use log::{info, warn};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use tokio::sync::RwLock;
+use tokio::{
+    select,
+    sync::{watch::Receiver, RwLock},
+};
 use warp::{Filter, Rejection, Reply};
 
 const METRIC_COLLECTION_FREQUENCY: Duration = Duration::from_secs(60);
@@ -26,6 +29,7 @@ fn count_resources(pool: &Pool<SqliteConnectionManager>, resource_type: &str) ->
 
 pub async fn update_metrics(
     metrics: Arc<RwLock<HashMap<&'static str, usize>>>,
+    mut shutdown: Receiver<bool>,
     pool: Pool<SqliteConnectionManager>,
 ) {
     loop {
@@ -47,7 +51,16 @@ pub async fn update_metrics(
                 "finished metric update loop, sleeping for {}s",
                 (METRIC_COLLECTION_FREQUENCY - cycle_time).as_secs()
             );
-            tokio::time::sleep(METRIC_COLLECTION_FREQUENCY - cycle_time).await;
+
+            select! {
+                _ = tokio::time::sleep(METRIC_COLLECTION_FREQUENCY - cycle_time) => (),
+                _ = shutdown.changed() => ()
+            };
+
+            if *shutdown.borrow() {
+                info!("metrics update loop detected cancellation request. exiting loop");
+                return;
+            }
         } else {
             warn!("metric collection loop took longer than {} seconds, restarting new loop immediately", METRIC_COLLECTION_FREQUENCY.as_secs());
         }
