@@ -13,7 +13,7 @@ docker run -e RUST_LOG=info \
     -e FTS_SCRAPER_REQUESTS_PER_SECOND=5 \
     -e FTS_SCRAPER_DOMAIN=oda.ft.dk \
     -e FTS_DATABASE_SQLITE_PATH=data/folketinget.sqlite3 \
-    -v $(pwd)/data:data \
+    -v $(pwd)/data:/data \
     ghcr.io/datavirke/folketinget-sqlite3-mirror:master
 ```
 Collected data will be stored in a `data` directory in your current working directory.
