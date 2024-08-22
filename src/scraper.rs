@@ -110,7 +110,7 @@ async fn mirror_next<C: Connector>(
     resource_type: &str,
     pool: &Pool<SqliteConnectionManager>,
     rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
-) -> Result<Page<serde_json::Value>, Error> {
+) -> Result<Page<serde_json::Value>, Box<dyn std::error::Error>> {
     let (count, max_id): (Option<u32>, Option<NaiveDateTime>) = pool
         .get()
         .unwrap()
@@ -135,32 +135,36 @@ async fn mirror_next<C: Connector>(
         "maximum opdateringsdato for {}: {:?}",
         resource_type, &max_id
     );
-    let page = get_next(datasource, resource_type, max_id, rate_limiter)
-        .await
-        .unwrap();
+    match get_next(datasource, resource_type, max_id, rate_limiter).await {
+        Ok(page) => {
+            for value in &page.value {
+                insert(&pool.get().unwrap(), resource_type, value).unwrap();
+            }
 
-    for value in &page.value {
-        insert(&pool.get().unwrap(), resource_type, value).unwrap();
+            let remaining: u32 = page.count.as_deref().unwrap_or("0").parse().unwrap();
+
+            if page.value.is_empty() {
+                debug!(
+                    "finished mirroring {} ({} total)",
+                    count.unwrap_or(0),
+                    resource_type
+                );
+            } else {
+                info!(
+                    "finished {} more {}, {} remaining ({}%)",
+                    page.value.len(),
+                    resource_type,
+                    remaining,
+                    100 - (remaining * 100) / (remaining + count.unwrap_or(0))
+                );
+            }
+            Ok(page)
+        },
+        Err(e) => {
+            eprintln!("Failed to get the next page for resource_type:{:?}, {:?}", resource_type, e);
+            Err(Box::new(e))
+        }
     }
-
-    let remaining: u32 = page.count.as_deref().unwrap_or("0").parse().unwrap();
-
-    if page.value.is_empty() {
-        debug!(
-            "finished mirroring {} ({} total)",
-            count.unwrap_or(0),
-            resource_type
-        );
-    } else {
-        info!(
-            "finished {} more {}, {} remaining ({}%)",
-            page.value.len(),
-            resource_type,
-            remaining,
-            100 - (remaining * 100) / (remaining + count.unwrap_or(0))
-        );
-    }
-    Ok(page)
 }
 
 fn mirror_all<C: Connector>(
@@ -178,13 +182,16 @@ fn mirror_all<C: Connector>(
     async move {
         let mut total = 0;
         loop {
-            let mirrored = mirror_next(&datasource, &resource_type, &pool, &rate_limiter)
-                .await
-                .unwrap();
-
-            total += mirrored.value.len();
-            if mirrored.value.is_empty() {
-                break;
+            match mirror_next(&datasource, &resource_type, &pool, &rate_limiter).await  {
+                Ok(mirrored) => {
+                    total += mirrored.value.len();
+                    if mirrored.value.is_empty() {
+                        break;
+                    }
+                },
+                Err(_e) => {
+                    //ignore and try again
+                }
             }
 
             if *shutdown.borrow() {
