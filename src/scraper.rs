@@ -86,23 +86,40 @@ fn client() -> Client<HttpsConnector<HttpConnector>> {
 async fn get_next<C: Connector>(
     datasource: &DataSource<C>,
     resource_type: &str,
+    count: u32,
     start: Option<NaiveDateTime>,
     rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
 ) -> Result<Page<serde_json::Value>, odata_simple_client::Error> {
-    let start = start.unwrap_or_else(|| NaiveDateTime::from_timestamp(0, 0));
-    debug!("fetching new {} starting from {}", resource_type, start);
+    let start_date = start.unwrap_or_else(|| NaiveDateTime::from_timestamp(0, 0));
+    let days_since_start_date = Utc::now().naive_utc().signed_duration_since(start_date).num_days();
 
-    let request = ListRequest::new(resource_type)
-        .order_by("opdateringsdato", Direction::Ascending)
-        .filter(
-            "opdateringsdato",
-            Comparison::GreaterThan,
-            &format!("datetime'{}'", start.format("%Y-%m-%dT%H:%M:%S%.3f")),
-        )
-        .inline_count(InlineCount::AllPages);
+    if start.is_none() || days_since_start_date >= 365 {
+        debug!("fetching new {} using count {}", resource_type, count);
 
-    rate_limiter.until_ready().await;
-    datasource.fetch_paged::<serde_json::Value>(request).await
+        let request = ListRequest::new(resource_type)
+            .order_by("opdateringsdato", Direction::Ascending)
+            .skip(count)
+            .inline_count(InlineCount::AllPages);
+
+        rate_limiter.until_ready().await;
+        datasource.fetch_paged::<serde_json::Value>(request).await
+    }
+    else {
+
+        debug!("fetching new {} starting from {}", resource_type, start_date);
+
+        let request = ListRequest::new(resource_type)
+            .order_by("opdateringsdato", Direction::Ascending)
+            .filter(
+                "opdateringsdato",
+                Comparison::GreaterThan,
+                &format!("datetime'{}'", start_date.format("%Y-%m-%dT%H:%M:%S%.3f")),
+            )
+            .inline_count(InlineCount::AllPages);
+
+        rate_limiter.until_ready().await;
+        datasource.fetch_paged::<serde_json::Value>(request).await
+    }
 }
 
 async fn mirror_next<C: Connector>(
@@ -135,7 +152,7 @@ async fn mirror_next<C: Connector>(
         "maximum opdateringsdato for {}: {:?}",
         resource_type, &max_id
     );
-    match get_next(datasource, resource_type, max_id, rate_limiter).await {
+    match get_next(datasource, resource_type, count.unwrap_or(0), max_id, rate_limiter).await {
         Ok(page) => {
             for value in &page.value {
                 insert(&pool.get().unwrap(), resource_type, value).unwrap();
