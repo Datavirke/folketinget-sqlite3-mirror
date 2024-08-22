@@ -30,8 +30,8 @@ pub fn backup_routes(
         .then(|pool| async move {
             info!("backup triggered");
             match create_backup(pool) {
-                Ok(p) => Ok(warp::reply::html(p)),
-                Err(e) => Ok(warp::reply::html(format!("Something went wrong: {}", e))),
+                Ok(p) => warp::reply::html(p),
+                Err(e) => warp::reply::html(format!("Something went wrong: {}", e)),
             }
         })
 }
