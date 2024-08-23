@@ -89,10 +89,10 @@ pub fn metric_routes(
                     .unwrap();
                 }
 
-                Ok(warp::http::Response::builder()
+                warp::http::Response::builder()
                     .header("Content-Type", "text/plain; charset=utf-8")
                     .status(200)
-                    .body(output))
+                    .body(output)
             },
         )
 }

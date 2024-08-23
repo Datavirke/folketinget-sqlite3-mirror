@@ -63,6 +63,6 @@ pub fn document_routes(
         .then(|request: DocumentRequest, pool| async move {
             let docs = fetch_documents_newer_than(pool, request.since);
 
-            Ok(warp::reply::json(&docs))
+            warp::reply::json(&docs)
         })
 }

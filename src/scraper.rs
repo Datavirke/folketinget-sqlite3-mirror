@@ -86,23 +86,40 @@ fn client() -> Client<HttpsConnector<HttpConnector>> {
 async fn get_next<C: Connector>(
     datasource: &DataSource<C>,
     resource_type: &str,
+    count: u32,
     start: Option<NaiveDateTime>,
     rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
 ) -> Result<Page<serde_json::Value>, odata_simple_client::Error> {
-    let start = start.unwrap_or_else(|| NaiveDateTime::from_timestamp(0, 0));
-    debug!("fetching new {} starting from {}", resource_type, start);
+    let start_date = start.unwrap_or_else(|| NaiveDateTime::from_timestamp(0, 0));
+    let days_since_start_date = Utc::now().naive_utc().signed_duration_since(start_date).num_days();
 
-    let request = ListRequest::new(resource_type)
-        .order_by("opdateringsdato", Direction::Ascending)
-        .filter(
-            "opdateringsdato",
-            Comparison::GreaterThan,
-            &format!("datetime'{}'", start.format("%Y-%m-%dT%H:%M:%S%.3f")),
-        )
-        .inline_count(InlineCount::AllPages);
+    if start.is_none() || days_since_start_date >= 365 {
+        debug!("fetching new {} using count {}", resource_type, count);
 
-    rate_limiter.until_ready().await;
-    datasource.fetch_paged::<serde_json::Value>(request).await
+        let request = ListRequest::new(resource_type)
+            .order_by("opdateringsdato", Direction::Ascending)
+            .skip(count)
+            .inline_count(InlineCount::AllPages);
+
+        rate_limiter.until_ready().await;
+        datasource.fetch_paged::<serde_json::Value>(request).await
+    }
+    else {
+
+        debug!("fetching new {} starting from {}", resource_type, start_date);
+
+        let request = ListRequest::new(resource_type)
+            .order_by("opdateringsdato", Direction::Ascending)
+            .filter(
+                "opdateringsdato",
+                Comparison::GreaterThan,
+                &format!("datetime'{}'", start_date.format("%Y-%m-%dT%H:%M:%S%.3f")),
+            )
+            .inline_count(InlineCount::AllPages);
+
+        rate_limiter.until_ready().await;
+        datasource.fetch_paged::<serde_json::Value>(request).await
+    }
 }
 
 async fn mirror_next<C: Connector>(
@@ -110,7 +127,7 @@ async fn mirror_next<C: Connector>(
     resource_type: &str,
     pool: &Pool<SqliteConnectionManager>,
     rate_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, QuantaClock>>,
-) -> Result<Page<serde_json::Value>, Error> {
+) -> Result<Page<serde_json::Value>, Box<dyn std::error::Error>> {
     let (count, max_id): (Option<u32>, Option<NaiveDateTime>) = pool
         .get()
         .unwrap()
@@ -135,32 +152,36 @@ async fn mirror_next<C: Connector>(
         "maximum opdateringsdato for {}: {:?}",
         resource_type, &max_id
     );
-    let page = get_next(datasource, resource_type, max_id, rate_limiter)
-        .await
-        .unwrap();
+    match get_next(datasource, resource_type, count.unwrap_or(0), max_id, rate_limiter).await {
+        Ok(page) => {
+            for value in &page.value {
+                insert(&pool.get().unwrap(), resource_type, value).unwrap();
+            }
 
-    for value in &page.value {
-        insert(&pool.get().unwrap(), resource_type, value).unwrap();
+            let remaining: u32 = page.count.as_deref().unwrap_or("0").parse().unwrap();
+
+            if page.value.is_empty() {
+                debug!(
+                    "finished mirroring {} ({} total)",
+                    count.unwrap_or(0),
+                    resource_type
+                );
+            } else {
+                info!(
+                    "finished {} more {}, {} remaining ({}%)",
+                    page.value.len(),
+                    resource_type,
+                    remaining,
+                    100 - (remaining * 100) / (remaining + count.unwrap_or(0))
+                );
+            }
+            Ok(page)
+        },
+        Err(e) => {
+            eprintln!("Failed to get the next page for resource_type:{:?}, {:?}", resource_type, e);
+            Err(Box::new(e))
+        }
     }
-
-    let remaining: u32 = page.count.as_deref().unwrap_or("0").parse().unwrap();
-
-    if page.value.is_empty() {
-        debug!(
-            "finished mirroring {} ({} total)",
-            count.unwrap_or(0),
-            resource_type
-        );
-    } else {
-        info!(
-            "finished {} more {}, {} remaining ({}%)",
-            page.value.len(),
-            resource_type,
-            remaining,
-            100 - (remaining * 100) / (remaining + count.unwrap_or(0))
-        );
-    }
-    Ok(page)
 }
 
 fn mirror_all<C: Connector>(
@@ -178,13 +199,16 @@ fn mirror_all<C: Connector>(
     async move {
         let mut total = 0;
         loop {
-            let mirrored = mirror_next(&datasource, &resource_type, &pool, &rate_limiter)
-                .await
-                .unwrap();
-
-            total += mirrored.value.len();
-            if mirrored.value.is_empty() {
-                break;
+            match mirror_next(&datasource, &resource_type, &pool, &rate_limiter).await  {
+                Ok(mirrored) => {
+                    total += mirrored.value.len();
+                    if mirrored.value.is_empty() {
+                        break;
+                    }
+                },
+                Err(_e) => {
+                    //ignore and try again
+                }
             }
 
             if *shutdown.borrow() {
